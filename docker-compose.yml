@@ -1,0 +1,152 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: iot-dashboard
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - pcap_data:/app/data/pcap
+      - feature_data:/app/data/features
+      - results_data:/app/data/results
+    ports:
+      - "5000:5000"
+    networks: [iot_net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  mininet:
+    build:
+      context: .
+      dockerfile: mininet/Dockerfile
+    container_name: iot-mininet
+    privileged: true
+    network_mode: host
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - pcap_data:/app/data/pcap
+      - feature_data:/app/data/features
+      - results_data:/app/data/results
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/mininet.ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  botnet:
+    build:
+      context: .
+      dockerfile: botnet/Dockerfile
+    container_name: iot-botnet
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - pcap_data:/app/data/pcap
+      - feature_data:/app/data/features
+      - results_data:/app/data/results
+    networks: [iot_net]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/botnet.ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  ids:
+    build:
+      context: .
+      dockerfile: ids/Dockerfile
+    container_name: iot-ids
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - pcap_data:/app/data/pcap
+      - feature_data:/app/data/features
+      - results_data:/app/data/results
+    networks: [iot_net]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ids.ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: iot-influxdb
+    env_file: .env
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpass123
+      DOCKER_INFLUXDB_INIT_ORG: iot-lab
+      DOCKER_INFLUXDB_INIT_BUCKET: iot-metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    ports:
+      - "8086:8086"
+    volumes:
+      - influx_data:/var/lib/influxdb2
+    networks: [iot_net]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.18
+    container_name: iot-mosquitto
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      - "1883:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks: [iot_net]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: iot-redis
+    ports:
+      - "6379:6379"
+    networks: [iot_net]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  iot_net:
+    driver: bridge
+
+volumes:
+  pcap_data:
+  feature_data:
+  results_data:
+  influx_data:
+  mosquitto_data:
+  mosquitto_log:
