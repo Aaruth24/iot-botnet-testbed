@@ -14,15 +14,53 @@ mkdir -p data/pcap/snapshots/normal data/pcap/snapshots/attack data/features dat
 
 docker compose up -d --build
 
-echo "Waiting for dashboard health..."
-until docker compose exec -T dashboard curl -fsS http://localhost:5000/api/health >/dev/null 2>&1; do
-  sleep 5
-done
+wait_for_dashboard() {
+  echo "Waiting for dashboard health..."
+  for _ in $(seq 1 60); do
+    if docker compose exec -T dashboard curl -fsS http://localhost:5000/api/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+  echo "Dashboard did not become healthy." >&2
+  docker compose ps
+  docker compose logs --tail=100 dashboard >&2
+  exit 1
+}
+
+wait_for_mininet() {
+  echo "Waiting for Mininet readiness..."
+  for _ in $(seq 1 60); do
+    if docker compose exec -T mininet test -f /tmp/mininet.ready >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! docker compose ps --status running --services | grep -qx mininet; then
+      echo "Mininet stopped before becoming ready." >&2
+      docker compose ps -a
+      docker compose logs --tail=100 mininet >&2
+      exit 1
+    fi
+    sleep 5
+  done
+  echo "Mininet did not become ready." >&2
+  docker compose ps
+  docker compose logs --tail=100 mininet >&2
+  exit 1
+}
+
+wait_for_dashboard
+wait_for_mininet
 
 echo "Collecting normal traffic for ${NORMAL_WAIT_SECONDS}s..."
 sleep "${NORMAL_WAIT_SECONDS}"
 
 docker compose exec -T mininet bash -lc 'cp /app/data/pcap/*.pcap /app/data/pcap/snapshots/normal/ 2>/dev/null || true'
+
+if ! docker compose exec -T ids bash -lc 'find /app/data/pcap/snapshots/normal -name "*.pcap" -type f -size +0c | grep -q .'; then
+  echo "No normal traffic PCAP files were captured." >&2
+  docker compose logs --tail=100 mininet >&2
+  exit 1
+fi
 
 echo "Training IDS on normal traffic snapshot..."
 docker compose exec -T ids python /app/ids/train.py --input /app/data/pcap/snapshots/normal --model /app/ids/models/if_model.pkl

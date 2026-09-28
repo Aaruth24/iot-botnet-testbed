@@ -8,9 +8,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - pcap_data:/app/data/pcap
-      - feature_data:/app/data/features
-      - results_data:/app/data/results
+      - ./data/pcap:/app/data/pcap
+      - ./data/features:/app/data/features
+      - ./data/results:/app/data/results
     ports:
       - "5000:5000"
     networks: [iot_net]
@@ -33,9 +33,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - pcap_data:/app/data/pcap
-      - feature_data:/app/data/features
-      - results_data:/app/data/results
+      - ./data/pcap:/app/data/pcap
+      - ./data/features:/app/data/features
+      - ./data/results:/app/data/results
     depends_on:
       dashboard:
         condition: service_healthy
@@ -55,9 +55,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - pcap_data:/app/data/pcap
-      - feature_data:/app/data/features
-      - results_data:/app/data/results
+      - ./data/pcap:/app/data/pcap
+      - ./data/features:/app/data/features
+      - ./data/results:/app/data/results
     networks: [iot_net]
     depends_on:
       dashboard:
@@ -78,9 +78,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - pcap_data:/app/data/pcap
-      - feature_data:/app/data/features
-      - results_data:/app/data/results
+      - ./data/pcap:/app/data/pcap
+      - ./data/features:/app/data/features
+      - ./data/results:/app/data/results
     networks: [iot_net]
     depends_on:
       dashboard:
@@ -144,9 +144,6 @@ networks:
     driver: bridge
 
 volumes:
-  pcap_data:
-  feature_data:
-  results_data:
   influx_data:
   mosquitto_data:
   mosquitto_log:
