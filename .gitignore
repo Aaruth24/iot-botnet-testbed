@@ -1,13 +1,7 @@
-# Local environment and secrets
-.env
-
-# Generated archive
-*.zip
-
-# Python cache and tooling output
 __pycache__/
-*.py[cod]
-.pytest_cache/
-
-# Generated experiment artifacts
-*.pcap
+*.pyc
+.env
+data/*.json
+data/*.csv
+data/*.joblib
+.DS_Store

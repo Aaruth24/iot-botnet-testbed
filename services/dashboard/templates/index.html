@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IoT Security Testbed</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◉</span>
+      <div>
+        <h1>Docker&nbsp;IoT Security Testbed</h1>
+        <p>Botnet-traffic simulation &amp; anomaly-based intrusion detection</p>
+      </div>
+    </div>
+    <div class="status-pills">
+      <span class="pill" id="pill-ids">IDS: —</span>
+      <span class="pill" id="pill-model">model: —</span>
+      <span class="pill" id="pill-attack">attack: idle</span>
+    </div>
+  </header>
+
+  <!-- experiment progress -->
+  <section class="progress-wrap" id="exp-wrap" hidden>
+    <div class="progress-head">
+      <strong id="exp-stage">experiment</strong>
+      <span id="exp-note"></span>
+    </div>
+    <div class="bar"><div class="bar-fill" id="exp-bar"></div></div>
+  </section>
+
+  <!-- KPI row -->
+  <section class="kpis">
+    <div class="kpi"><div class="kpi-val" id="k-acc">—</div><div class="kpi-lab">Accuracy</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-prec">—</div><div class="kpi-lab">Precision</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-rec">—</div><div class="kpi-lab">Recall</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-f1">—</div><div class="kpi-lab">F1-score</div></div>
+    <div class="kpi"><div class="kpi-val danger" id="k-fpr">—</div><div class="kpi-lab">False-positive rate</div></div>
+    <div class="kpi"><div class="kpi-val" id="k-det">—</div><div class="kpi-lab">Detection time</div></div>
+  </section>
+
+  <div class="grid">
+    <!-- controls -->
+    <section class="card controls">
+      <h2>Controls</h2>
+      <button class="btn primary" id="btn-exp">▶ Run full experiment</button>
+      <div class="sub">Baseline → train IDS → attack → evaluate → report</div>
+
+      <div class="divider"></div>
+      <label class="lbl">Attack signature</label>
+      <select id="atk-type">
+        <option value="scan">Port scan</option>
+        <option value="syn_flood">SYN flood</option>
+        <option value="mqtt_flood">MQTT connection flood</option>
+        <option value="dos_udp">UDP DoS flood</option>
+        <option value="mixed">Mixed (random)</option>
+      </select>
+      <label class="lbl">Intensity <span id="atk-int-val">2</span></label>
+      <input type="range" id="atk-int" min="1" max="6" value="2" />
+      <div class="btn-row">
+        <button class="btn danger" id="btn-atk-start">Launch traffic</button>
+        <button class="btn ghost" id="btn-atk-stop">Stop</button>
+      </div>
+
+      <div class="divider"></div>
+      <div class="btn-row">
+        <button class="btn ghost" id="btn-train">Train IDS</button>
+        <button class="btn ghost" id="btn-detect">Detect mode</button>
+      </div>
+      <div class="sub" id="flow-counts">flows: 0</div>
+    </section>
+
+    <!-- topology -->
+    <section class="card">
+      <h2>Virtual IoT network</h2>
+      <canvas id="topo" height="260"></canvas>
+      <div class="legend">
+        <span><i class="dot broker"></i> broker</span>
+        <span><i class="dot device"></i> IoT device</span>
+        <span><i class="dot attacker"></i> attacker</span>
+      </div>
+    </section>
+
+    <!-- throughput chart -->
+    <section class="card">
+      <h2>Flow throughput</h2>
+      <canvas id="throughput" height="220"></canvas>
+    </section>
+
+    <!-- confusion matrix -->
+    <section class="card">
+      <h2>Confusion matrix</h2>
+      <table class="cm">
+        <tr><th></th><th>Pred. normal</th><th>Pred. attack</th></tr>
+        <tr><th>Actual normal</th><td class="tn" id="cm-tn">0</td><td class="fp" id="cm-fp">0</td></tr>
+        <tr><th>Actual attack</th><td class="fn" id="cm-fn">0</td><td class="tp" id="cm-tp">0</td></tr>
+      </table>
+      <div class="sub" id="cm-mode">mode: —</div>
+    </section>
+
+    <!-- alerts -->
+    <section class="card span2">
+      <h2>IDS alerts <span class="count" id="alert-count">0</span></h2>
+      <div class="feed" id="alerts"></div>
+    </section>
+
+    <!-- live flows -->
+    <section class="card span2">
+      <h2>Live network flows</h2>
+      <div class="feed mono" id="flows"></div>
+    </section>
+
+    <!-- comparison -->
+    <section class="card span2">
+      <h2>Testbed comparison</h2>
+      <div class="table-wrap"><table class="cmp" id="cmp"></table></div>
+    </section>
+
+    <!-- event log -->
+    <section class="card span2">
+      <h2>Event log</h2>
+      <div class="feed mono" id="events"></div>
+    </section>
+  </div>
+
+  <footer>
+    Isolated Docker research testbed · all attack traffic is synthetic and
+    confined to the internal network · for IDS evaluation &amp; education
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

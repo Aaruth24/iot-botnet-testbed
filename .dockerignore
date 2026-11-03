@@ -1,0 +1,9 @@
+.git
+.gitignore
+data/*.json
+data/*.csv
+data/*.joblib
+**/__pycache__
+**/*.pyc
+*.md
+scripts

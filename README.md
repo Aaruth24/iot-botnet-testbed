@@ -1,196 +1,314 @@
-# Docker-Based Virtual IoT Testbed for Botnet Attack Simulation and Intrusion Detection System Evaluation
+# Docker-Based Virtual IoT Security Testbed
+### Botnet-traffic simulation & anomaly-based Intrusion Detection System (IDS) evaluation
 
-## Linux Quick Start
+A fully containerised, reproducible research testbed that builds a virtual IoT
+network, generates both **benign** and **attack** network traffic, detects
+anomalies with an **Isolation-Forest IDS**, and visualises everything on a
+**live web dashboard** — all with a single `docker compose up`.
 
-### Prerequisites
+> **Scope & ethics.** This is a *defensive security research* project. Every
+> component runs inside an **isolated internal Docker network**. The attack
+> component is a **traffic-pattern generator**: it synthesises the
+> *network-flow signatures* of common IoT attacks (scan, SYN flood, MQTT
+> flood, UDP flood) so an IDS can be trained and scored against a known ground
+> truth. There is **no real exploit code, no self-propagating malware, no
+> scanning of real/external hosts, and no credential attacks** anywhere in
+> this repository — the same principle behind public IDS datasets such as
+> BoT-IoT, N-BaIoT, IoT-23 and CICIoT2023.
 
-- Ubuntu 20.04+, Debian 11+, or another modern Linux distribution
-- Docker Engine 24+ and the Docker Compose plugin
-- Make and Git
+---
 
-### One-time setup
+## 1. Why this is an upgrade over the original project
+
+| Area | Original project | This version |
+|---|---|---|
+| Orchestration | Mininet + manual steps | **Pure Docker Compose** — one command, runs on any Linux box |
+| Devices | Few / static | **6 device types** with distinct, realistic traffic profiles |
+| Message bus | — | **Redis streams** decouple every service (clean, scalable) |
+| IDS features | Raw per-flow | Per-flow **+ rolling source-context features** (catches scans/floods) |
+| IDS lifecycle | Train once | **Live training / detecting modes**, model persisted to disk |
+| Dashboard | Static Flask page | **Live SPA**: topology, throughput chart, confusion matrix, alerts, event log, controls |
+| Experiments | Manual | **One-click automated pipeline** → writes all result files |
+| Reproducibility | OS-dependent | **Container-isolated & deterministic** (seeded model) |
+| Metrics | Reported | **Computed live** from a streaming confusion matrix |
+
+Everything from the paper is preserved (MQTT/Mosquitto, Mirai-style attack
+*phases*, Isolation Forest, metric storage, Flask dashboard, testbed
+comparison) — just made to actually run, cross-platform, with better tooling.
+
+---
+
+## 2. Architecture
+
+```
+                         ┌──────────────────────────────────────────┐
+                         │          internal Docker network          │
+                         │               10.10.0.0/24                 │
+  Browser  ── :8080 ──▶  │  ┌───────────┐     MQTT      ┌───────────┐ │
+                         │  │ dashboard │                │ mosquitto │ │
+                         │  └─────┬─────┘                └─────▲─────┘ │
+                         │        │ reads                      │ pub   │
+                         │        ▼                      ┌──────┴─────┐ │
+                         │  ┌───────────┐   flow stream  │ 6 × IoT    │ │
+                         │  │   redis    │◀───────────────│ devices    │ │
+                         │  │  (streams) │                └────────────┘ │
+                         │  └─────▲──┬───┘                ┌────────────┐ │
+                         │  flows │  │ control            │ attack-sim │ │
+                         │        │  └───────────────────▶│ (synthetic)│ │
+                         │  ┌─────┴──────┐                └────────────┘ │
+                         │  │    ids     │  Isolation Forest             │
+                         │  │ (sklearn)  │  → alerts + metrics           │
+                         │  └────────────┘                               │
+                         │  ┌──────────────┐  runs the full experiment   │
+                         │  │ orchestrator │  → writes ./data/*          │
+                         │  └──────────────┘                             │
+                         └──────────────────────────────────────────────┘
+```
+
+**Services**
+
+- **redis** – message bus + shared state (flow stream, alerts, metrics, control).
+- **mosquitto** – real MQTT broker (tcp/1883) the devices publish to.
+- **dev-*** (×6) – simulated IoT devices (temp, humidity, plug, door lock, IP camera, thermostat). Each publishes MQTT telemetry and emits a flow record.
+- **attack-sim** – synthetic attack-traffic generator (scan / syn_flood / mqtt_flood / dos_udp).
+- **ids** – Isolation-Forest engine: feature extraction, training, scoring, live metrics.
+- **orchestrator** – automated experiment pipeline and report writer.
+- **dashboard** – Flask REST API + single-page live web UI.
+
+---
+
+## 3. Requirements
+
+- Linux (also works on macOS / Windows with Docker Desktop)
+- **Docker Engine 20.10+** and the **Docker Compose plugin** (`docker compose`)
+
+Check:
+```bash
+docker --version
+docker compose version
+```
+
+---
+
+## 4. Quick start
+
+### Option A — full Dockerized testbed (Linux)
+```bash
+cd iot-security-testbed
+./run-linux.sh           # checks Docker, builds, starts everything
+# or:  docker compose up --build -d
+```
+`run-linux.sh` verifies Docker is installed and running and prints the exact
+install commands for Ubuntu/Debian, Fedora and Arch if anything is missing.
+
+### Option B — offline demo (no Docker, no internet)
+For a presentation/viva, open the self-contained page in any browser:
+```bash
+xdg-open demo/testbed-demo.html
+```
+It runs the entire testbed as a live in-browser simulation — see `demo/README.md`.
+
+### Then
+
+Open the dashboard:
+
+```
+http://localhost:8080
+```
+
+Then either click **▶ Run full experiment** in the UI, or:
 
 ```bash
-git clone <your-repo-url>
-cd iot-botnet-testbed
-make setup
+./scripts/demo.sh
 ```
 
-If Docker socket permissions fail, run `sudo usermod -aG docker $USER` and then `newgrp docker`.
-
-### Run everything
+Shut down:
 
 ```bash
-make up
-make dashboard
+docker compose down          # keep data
+docker compose down -v       # also wipe redis volume
 ```
 
-The dashboard is available at `http://localhost:5000`. Run `make run` to execute the capture, training, attack, and evaluation pipeline. Stop the stack with `make down`.
+### Handy `make` shortcuts
+```bash
+make up           # build + start everything
+make experiment   # trigger the automated pipeline
+make attack       # fire a 30s port-scan for a quick demo
+make stop         # stop attack traffic
+make logs         # follow all logs
+make reports      # list result files
+make down         # stop
+```
 
-### Offline demo
+---
 
-Open [dashboard/static/index.html](dashboard/static/index.html) directly in a browser. The dashboard falls back to local demo data and its Launch Attack control runs a complete animated simulation without Docker.
+## 5. Using the dashboard
 
-A Docker-based virtual IoT security lab for simulating Mirai-style botnet attacks and evaluating an Isolation Forest intrusion detection system against multiple testbed styles.
+- **KPI row** – live accuracy, precision, recall, F1, false-positive rate, detection time.
+- **Controls** – run the full experiment, launch/stop specific attacks, switch the IDS between *training* and *detecting*.
+- **Virtual IoT network** – topology of devices, broker and attacker.
+- **Flow throughput** – benign vs attack flows per second.
+- **Confusion matrix** – live TP / FP / TN / FN.
+- **IDS alerts** – each flagged flow, marked true-positive or false-positive.
+- **Live network flows** – raw flow feed.
+- **Testbed comparison** – Docker (measured) vs VM / hardware (reference).
+- **Event log** – what every service is doing.
 
-## Project Objectives
+### Manual flow (without the one-click pipeline)
+1. **Train IDS** → collects benign traffic, fits the model, switches to detecting.
+2. **Launch traffic** (pick a signature) → watch alerts + the confusion matrix fill in.
+3. **Stop** when done.
 
-- Build a scalable IoT testbed using Docker and Mininet.
-- Simulate Mirai-like attack behavior with scan, infect, report, and attack stages.
-- Train and evaluate an Isolation Forest IDS on captured traffic features.
-- Compare Docker-based, VM-based, and hardware-based testbed characteristics.
-- Visualize topology, attacks, alerts, and metrics through a Flask dashboard.
+---
 
-## System Overview
+## 6. The automated experiment pipeline
 
-The system is split into four services:
+`orchestrator` reproduces the paper's methodology end-to-end:
 
-- `mininet` creates the virtual IoT network and captures traffic.
-- `botnet` runs the Mirai simulation and attack modules.
-- `ids` extracts flow features, trains the Isolation Forest model, and watches for anomalies.
-- `dashboard` exposes REST endpoints and a self-contained live UI.
+1. **Baseline** – collect benign IoT traffic (default 40 s).
+2. **Train** – fit the Isolation Forest + scaler on benign flows; persist to `/data/ids_model.joblib`.
+3. **Attack** – replay each attack signature while benign traffic continues.
+4. **Evaluate** – the IDS scores every flow against ground truth (default 20 s window).
+5. **Report** – write result files to `./data/`:
 
-Supporting services include `influxdb` for metrics storage and `mosquitto` for MQTT-based IoT simulation.
+| File | Contents |
+|---|---|
+| `topology.json` | nodes & edges of the virtual network |
+| `attack_log.csv` | every alert with verdict |
+| `alerts.json` | full alert objects |
+| `metrics.json` | final confusion matrix + scores |
+| `testbed_comparison.csv` | Docker vs VM vs hardware |
 
-For a deeper design breakdown, see [docs/architecture.md](docs/architecture.md).
+Timings are configurable via `.env` (copy `.env.example`).
 
-## Prerequisites
+---
 
-- Docker Engine or Docker Desktop with Compose support
-- Python 3.10+ if you plan to run scripts outside Docker
-- Linux or WSL2 for reliable Mininet support
+## 7. How detection works
 
-## Repository Layout
+Each flow becomes a feature vector:
 
-- [docker-compose.yml](docker-compose.yml)
-- [requirements.txt](requirements.txt)
-- [mininet/topology.py](mininet/topology.py)
-- [botnet/mirai_sim.py](botnet/mirai_sim.py)
-- [ids/ids_engine.py](ids/ids_engine.py)
-- [dashboard/app.py](dashboard/app.py)
-- [evaluation/compare_testbeds.py](evaluation/compare_testbeds.py)
-- [scripts/run_experiment.sh](scripts/run_experiment.sh)
-- [docs/setup_guide.md](docs/setup_guide.md)
+- **Base (per-flow):** bytes, packets, duration, packet rate, byte rate, average packet size, destination port, protocol.
+- **Context (rolling, per source IP over a 30 s window):** distinct destination ports, flow count.
 
-## Setup
+The context features are what make **port scans** (many distinct ports from one
+source) and **floods** (huge flow counts / packet rates) clearly separable from
+a steady IoT baseline. An **Isolation Forest** (200 trees, seeded) is fitted on
+benign traffic only; at inference a flow whose anomaly score drops below the
+decision boundary is flagged. Ground-truth labels drive a **streaming confusion
+matrix** for accuracy / precision / recall / F1 / FPR and mean detection
+latency — exactly the metrics in the paper.
 
-1. Review `.env` and adjust `NETWORK_SIZE`, `TARGET_IP`, `ATTACK_TYPE`, and `PACKET_RATE` if needed.
-2. Build the containers:
+---
+
+### Reproduce the detection result without Docker
+
+A self-contained validator drives the **real** feature-extraction and
+Isolation-Forest code against simulated benign + attack flows:
 
 ```bash
-docker compose build
+pip install -r services/ids/requirements.txt
+python3 tools/validate.py
 ```
 
-3. Start the full stack:
+Typical output (seeded, deterministic):
+
+```
+ accuracy   90.9 %   precision 93.7 %   recall 87.9 %
+ F1-score   90.7 %   false-positive 6.1 %
+```
+
+> **Operating point / honesty note.** The false-positive rate tracks the
+> `IDS_CONTAMINATION` hyperparameter (Isolation Forest sets its decision
+> threshold from it). Lower it (e.g. `0.03`) for fewer false alarms at some
+> cost to recall; raise it for higher recall. Report the numbers **your own
+> run** produces — don't copy the abstract's target figures. Change it live
+> with `IDS_CONTAMINATION=0.03 docker compose up -d ids`.
+
+### Evaluate on a REAL public dataset (the key credibility upgrade)
+
+Run the *same* Isolation-Forest IDS on real labelled IoT traffic — CICIoT2023,
+BoT-IoT, N-BaIoT or IoT-23 — and report those numbers next to the live testbed:
 
 ```bash
-docker compose up -d
+pip install -r services/ids/requirements.txt pandas
+
+# point it at a real dataset CSV you downloaded:
+python3 tools/evaluate_dataset.py --csv CICIoT2023.csv
+
+# no dataset yet? it generates a labelled CSV and evaluates it out of the box:
+python3 tools/evaluate_dataset.py --synthesize --rows 20000
 ```
 
-4. Confirm the dashboard is healthy:
+It auto-detects the label column, trains on benign rows only, scores everything,
+and prints accuracy / precision / recall / F1 / FPR + a confusion matrix. This
+turns the project from "a simulator" into "a testbed **and** a detector evaluated
+on real-world attack data".
 
-```bash
-curl http://localhost:5000/api/health
+### What the live demo adds (`demo/testbed-demo.html`)
+
+The browser demo now also computes, live from the IDS scores:
+- a **ROC curve + AUC**,
+- **per-attack detection rates** (scan / SYN / MQTT / UDP),
+- a **Proposed (Isolation Forest) vs Baseline (volume threshold)** comparison —
+  the baseline is the weak "existing system", so you can *show* why the proposed
+  detector is better instead of just claiming it.
+
+---
+
+## 8. Mapping to the paper
+
+| Paper component | Where it lives |
+|---|---|
+| Docker virtual network | `docker-compose.yml` (`iotnet` 10.10.0.0/24) |
+| MQTT / Mosquitto | `mosquitto/` + `services/iot-device/` |
+| Mirai-style phases (scan/infect/report/attack) | `services/attack-sim/simulator.py` (flow signatures) |
+| Isolation-Forest IDS | `services/ids/ids_engine.py` |
+| Metric storage | Redis (`metrics:latest`) + `./data/metrics.json` |
+| Flask dashboard | `services/dashboard/` |
+| Automated pipeline | `services/orchestrator/pipeline.py` |
+| Testbed comparison | `./data/testbed_comparison.csv` |
+
+> The VM and hardware rows in the comparison are **reference figures from the
+> literature** for context; the Docker row is **measured live** from your run.
+> Report your own measured numbers in the paper.
+
+---
+
+## 9. Project layout
+
+```
+iot-security-testbed/
+├── docker-compose.yml        # orchestrates all services
+├── Makefile                  # convenience targets
+├── .env.example              # tunable experiment timings
+├── mosquitto/mosquitto.conf  # MQTT broker config
+├── common/testbed.py         # shared schema + Redis + feature helpers
+├── services/
+│   ├── iot-device/           # simulated IoT devices (MQTT publishers)
+│   ├── attack-sim/           # synthetic attack-traffic generator
+│   ├── ids/                  # Isolation-Forest IDS engine
+│   ├── orchestrator/         # automated experiment pipeline
+│   └── dashboard/            # Flask API + live web UI
+├── scripts/demo.sh           # one-shot end-to-end demo
+└── data/                     # generated result files (gitignored)
 ```
 
-## Running on Linux
+---
 
-### Prerequisites
+## 10. Troubleshooting
 
-- Docker Engine 24+ (not Docker Desktop)
-- Docker Compose plugin (`sudo apt install docker-compose-plugin`)
-- Git
+- **Port 8080 busy** → change `"8080:8080"` to e.g. `"8090:8080"` in `docker-compose.yml`.
+- **First build is slow** → `scikit-learn`/`numpy` compile once; later builds are cached.
+- **Metrics stay at 0** → the IDS must be in *detecting* mode with a trained model; use **Run full experiment** or the **Train IDS** button first.
+- **Reset everything** → `docker compose down -v && docker compose up --build -d`.
 
-### Quick start
+---
 
-```bash
-git clone <your-repo>
-cd iot-botnet-testbed
-make setup
-make up
-make run
-# Dashboard opens at http://localhost:5000
+## 11. Extending it (ideas for the viva / future work)
+
+- Add a supervised model (Random Forest / XGBoost) and compare with the unsupervised IDS.
+- Replay a public dataset (BoT-IoT, CICIoT2023) through the same pipeline.
+- Add InfluxDB + Grafana for long-term metric storage.
+- Scale the device swarm with `docker compose up --scale dev-temp=20`.
+- Add SDN (Open vSwitch / Ryu) for programmable mitigation of detected attacks.
 ```
-
-If you get permission errors on the Docker socket:
-
-```bash
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-## Run the Full Experiment
-
-Use the scripted pipeline to run the complete capture, training, attack, and evaluation flow:
-
-```bash
-bash scripts/run_experiment.sh
-```
-
-The script performs these steps:
-
-1. Starts the Docker stack.
-2. Waits for the dashboard to become healthy.
-3. Collects normal traffic.
-4. Trains the Isolation Forest IDS.
-5. Launches the Mirai attack simulation.
-6. Generates labeled evaluation data.
-7. Computes IDS metrics and comparison artifacts.
-8. Produces a summary file in `data/results/`.
-
-## View the Dashboard
-
-Open the dashboard in a browser at:
-
-```text
-http://localhost:5000
-```
-
-The dashboard shows:
-
-- Live topology graph
-- Attack event feed
-- IDS metrics cards
-- Alert stream
-- Docker vs VM vs Hardware comparison chart
-
-## Expected Results
-
-After a successful run, you should find artifacts like:
-
-- `data/results/topology.json`
-- `data/results/attack_log.csv`
-- `data/results/alerts.json`
-- `data/results/metrics.json`
-- `data/results/testbed_comparison.csv`
-- `data/results/*.png` comparison plots
-
-Expected behavior:
-
-- Docker should show the fastest startup and the lowest resource overhead.
-- VM-based setups should be more expensive than Docker but easier to isolate.
-- Hardware-based setups should remain the least scalable and slowest to provision.
-- IDS accuracy should improve after training on clean normal traffic captures.
-
-## Screenshots
-
-Add screenshots of the dashboard, topology graph, attack feed, and comparison plots from `data/results/` or your final report folder.
-
-## Troubleshooting
-
-- If Mininet fails to start, verify that you are using Linux or WSL2 and that Docker is running in privileged mode for the `mininet` service.
-- If the IDS has no model yet, run the training step first or let `scripts/run_experiment.sh` create one automatically.
-- If raw packet sending fails, confirm that the container has network permissions and that you are running the attack from inside Docker.
-- If the dashboard is blank, check `docker compose logs dashboard` and confirm that `data/results/topology.json` and `data/results/metrics.json` exist.
-- If PCAP files are empty, give the Mininet service enough time to generate normal traffic before training.
-
-## References
-
-- Mirai botnet paper: Antonakakis et al., "Understanding the Mirai Botnet", USENIX Security 2017.
-- Isolation Forest paper: Liu, Ting, and Zhou, "Isolation Forest", ICDM 2008.
-- N-BaIoT dataset: Meidan et al., "N-BaIoT: Network-based Detection of IoT Botnet Attacks Using Deep Autoencoders".
-- CIC-IoT dataset family for IoT traffic benchmarking and comparison.
-
-## Notes
-
-This repository is designed to be a complete final-year project scaffold. You can extend it with your own dataset, tune the Isolation Forest threshold, and replace the default benchmark profiles with real hardware and VM measurements.

@@ -1,149 +1,127 @@
-services:
-  dashboard:
-    build:
-      context: .
-      dockerfile: dashboard/Dockerfile
-    container_name: iot-dashboard
-    env_file: .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ./data/pcap:/app/data/pcap
-      - ./data/features:/app/data/features
-      - ./data/results:/app/data/results
-    ports:
-      - "5000:5000"
-    networks: [iot_net]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/api/health >/dev/null"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-    restart: unless-stopped
+# Docker-based Virtual IoT Security Testbed
+# ---------------------------------------------------------------------------
+# One command (`docker compose up --build`) brings up an isolated virtual IoT
+# network, an MQTT broker, a swarm of simulated devices, an attack-traffic
+# generator, an Isolation-Forest IDS, an automated experiment pipeline and a
+# live web dashboard. Everything runs on an internal bridge network; nothing
+# here touches real or external hosts.
 
-  mininet:
-    build:
-      context: .
-      dockerfile: mininet/Dockerfile
-    container_name: iot-mininet
-    privileged: true
-    network_mode: host
-    env_file: .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ./data/pcap:/app/data/pcap
-      - ./data/features:/app/data/features
-      - ./data/results:/app/data/results
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/mininet.ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  botnet:
-    build:
-      context: .
-      dockerfile: botnet/Dockerfile
-    container_name: iot-botnet
-    env_file: .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ./data/pcap:/app/data/pcap
-      - ./data/features:/app/data/features
-      - ./data/results:/app/data/results
-    networks: [iot_net]
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/botnet.ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
-  ids:
-    build:
-      context: .
-      dockerfile: ids/Dockerfile
-    container_name: iot-ids
-    env_file: .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ./data/pcap:/app/data/pcap
-      - ./data/features:/app/data/features
-      - ./data/results:/app/data/results
-    networks: [iot_net]
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ids.ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
-  influxdb:
-    image: influxdb:2.7
-    container_name: iot-influxdb
-    env_file: .env
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: adminpass123
-      DOCKER_INFLUXDB_INIT_ORG: iot-lab
-      DOCKER_INFLUXDB_INIT_BUCKET: iot-metrics
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
-    ports:
-      - "8086:8086"
-    volumes:
-      - influx_data:/var/lib/influxdb2
-    networks: [iot_net]
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    restart: unless-stopped
-
-  mosquitto:
-    image: eclipse-mosquitto:2.0.18
-    container_name: iot-mosquitto
-    command: mosquitto -c /mosquitto-no-auth.conf
-    ports:
-      - "1883:1883"
-    volumes:
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
-    networks: [iot_net]
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: iot-redis
-    ports:
-      - "6379:6379"
-    networks: [iot_net]
-    depends_on:
-      dashboard:
-        condition: service_healthy
-    restart: unless-stopped
+name: iot-security-testbed
 
 networks:
-  iot_net:
+  iotnet:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.1
 
 volumes:
-  influx_data:
-  mosquitto_data:
-  mosquitto_log:
+  redisdata:
+
+x-device: &device
+  build:
+    context: .
+    dockerfile: services/iot-device/Dockerfile
+  image: iot-testbed/device
+  restart: unless-stopped
+  depends_on:
+    redis: {condition: service_healthy}
+    mosquitto: {condition: service_started}
+  networks: [iotnet]
+  environment:
+    REDIS_HOST: redis
+    MQTT_HOST: mosquitto
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [iotnet]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    networks:
+      iotnet:
+        ipv4_address: 10.10.0.2
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    expose: ["1883"]
+
+  # ---- simulated IoT devices (benign traffic) ----
+  dev-temp:      {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: temp_sensor, DEVICE_ID: temp-01}}
+  dev-humidity:  {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: humidity,    DEVICE_ID: hum-01}}
+  dev-plug:      {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: smart_plug,  DEVICE_ID: plug-01}}
+  dev-door:      {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: door_lock,   DEVICE_ID: door-01}}
+  dev-camera:    {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: ip_camera,   DEVICE_ID: cam-01}}
+  dev-thermo:    {<<: *device, environment: {REDIS_HOST: redis, MQTT_HOST: mosquitto, DEVICE_TYPE: thermostat,  DEVICE_ID: thermo-01}}
+
+  # ---- attack-traffic generator (synthetic, internal only) ----
+  attack-sim:
+    build: {context: ., dockerfile: services/attack-sim/Dockerfile}
+    image: iot-testbed/attack-sim
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+    networks:
+      iotnet:
+        ipv4_address: 10.10.0.66
+    environment:
+      REDIS_HOST: redis
+      ATTACKER_IP: 10.10.0.66
+      TARGET_SUBNET: 10.10.0
+      BROKER_IP: 10.10.0.2
+
+  # ---- Isolation-Forest intrusion detection system ----
+  ids:
+    build: {context: ., dockerfile: services/ids/Dockerfile}
+    image: iot-testbed/ids
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [iotnet]
+    environment:
+      REDIS_HOST: redis
+      MODEL_PATH: /data/ids_model.joblib
+      IDS_CONTAMINATION: "0.05"
+      IDS_WINDOW_SECONDS: "30"
+    volumes:
+      - ./data:/data
+
+  # ---- automated experiment pipeline ----
+  orchestrator:
+    build: {context: ., dockerfile: services/orchestrator/Dockerfile}
+    image: iot-testbed/orchestrator
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [iotnet]
+    environment:
+      REDIS_HOST: redis
+      DATA_DIR: /data
+      AUTO_RUN: "0"            # set to 1 to run one experiment automatically on boot
+      EXP_BASELINE_SECONDS: "40"
+      EXP_ATTACK_SECONDS: "25"
+      EXP_EVAL_SECONDS: "20"
+    volumes:
+      - ./data:/data
+
+  # ---- web dashboard ----
+  dashboard:
+    build: {context: ., dockerfile: services/dashboard/Dockerfile}
+    image: iot-testbed/dashboard
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [iotnet]
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_HOST: redis
